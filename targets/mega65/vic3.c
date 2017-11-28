@@ -391,13 +391,57 @@ static inline void vic2_render_screen_text ( Uint32 *p, int tail )
 				// FIXME: however in the current situation we can't do that since of the "fixed" line length for 80 or 40 chars ... :(
 				p += xlim == 39 ? 16 : 8;	// so we just ignore ... FIXME !!
 			} else {
-				int a;
+                                // Mega65 has some extra fetzures for mirroring chars in x and y direction:
+                                // -- First colour RAM byte has vertical controls
+                                //glyph_flip_vertical <= colourramdata(7);
+                                //glyph_flip_horizontal <= colourramdata(6);
+                                //glyph_with_alpha <= colourramdata(5);
+                                //-- bit 4 is spare for an extra attribute
+                                //if colourramdata(3)='1' then
+                                //glyph_trim_top <= to_integer(colourramdata(2 downto 0));
+                                //    else
+                                //  glyph_trim_bottom <= to_integer(colourramdata(2 downto 0));
+                            
+				int a,x_off=0,y_off=0,y_trim=0;
+                                Uint8 attrdata = coldata;
+                                coldata = *(colp+1);
 				Uint8 *cp = memory + (((vidp[0] << 6) + (charline << 3) + (vidp[1] << 14)) & 0x1ffff); // and-mask: wrap-around in 128K of chip-RAM
-				for (a = 0; a < 8; a++) {
+                               
+                                if (attrdata & 0x80){ x_off = 7;}                           /*mirror-char x-direction*/
+                                if (attrdata & 0x40){ y_off = 56-(8*(scanline%8));}         /*mirror-char y-direction*/
+                                /* Shift char towards bottom or top. Fill empty line in */
+                                
+                                Uint8 trim_val=attrdata & 0x07;
+                                if (attrdata & 0x08){
+                                    if ((scanline%8)<trim_val){
+                                        y_trim=-1;
+                                    }else{
+                                        y_trim =  (-8*trim_val);
+                                    }
+                                }else{
+                                    if ((scanline%8)<(8-trim_val)){
+                                        y_trim =  (8*trim_val) ;
+                                    }else{
+                                        y_trim=-1;
+                                    }
+                                }
+                                                   
+                                if (y_trim==(-1)){
+                                    for (a = 0; a < 8; a++) {
+                                        if (xlim != 79)
+                                            *(p++) = 0;
+                                        *(p++) = 0;
+                                    }
+                                            
+                                            
+                                }else{
+                                    for (a = 0; a < 8; a++) {
 					if (xlim != 79)
-						*(p++) = palette[*cp];
-					*(p++) = palette[*(cp++)];
-				}
+						*(p++) = palette[*(cp+a+x_off+y_off + y_trim)];
+					*(p++) = palette[*(cp+a+x_off+y_off+ y_trim)];
+                                        if (x_off){x_off--;}                                        
+                                    }
+                                }
 			}
 		} else {
 			Uint8 chrdata = chrg[(*vidp << 3) + charline];

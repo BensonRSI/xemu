@@ -313,7 +313,9 @@ static void execute_command ( void )
 		return;	// no cmd was given?!
 	if (curcmd > 0xFF)
 		return; // only control register was written, not the command register
+#ifdef DEBUG_FOR_PAUL
 	printf("Command: $%02X" NL, cmd);
+#endif
 	switch (cmd & 0xF8) {	// high 5 bits of the command ...
 		case 0x40:	// read sector
 			//status_a |= 16;		// record not found for testing ...
@@ -326,7 +328,9 @@ static void execute_command ( void )
 			read_sector();
 			//cache_p_drive = (cache_p_drive + BLOCK_SIZE) & 511;
 			//////////////cache_p_cpu = 0; // yayy .... If it's not here we can't get READY. prompt!!
+#ifdef DEBUG_FOR_PAUL
 			printf("READ: cache_p_cpu=%d / cache_p_fdc=%d drive_selected=%d" NL, cache_p_cpu, cache_p_fdc, drive);
+#endif
 			DEBUG("FDC: READ: head_track=%d need_track=%d head_side=%d need_side=%d need_sector=%d drive_selected=%d" NL,
 				head_track, track, head_side, side, sector, drive
 			);
@@ -336,12 +340,15 @@ static void execute_command ( void )
 				status_a |= 64;         // set DRQ
 				status_a &= (255 - 32); // clear EQ
 				write_sector();
+#ifdef DEBUG_FOR_PAUL
 				printf("WRITE: cache_p_cpu=%d / cache_p_fdc=%d drive_selected=%d" NL, cache_p_cpu, cache_p_fdc, drive);
-				DEBUG("FDC: WRITE: head_track=%d need_track=%d head_side=%d need_side=%d need_sector=%d drive_selected=%d" NL,
+#endif
+                                DEBUG("FDC: WRITE: head_track=%d need_track=%d head_side=%d need_side=%d need_sector=%d drive_selected=%d" NL,
                                 	head_track, track, head_side, side, sector, drive
                         	);
-			} else
+			} else {
 				printf("Sorry, write protected stuff ..." NL);
+                        }
 			break;
 		case 0x10:	// head step out or no step
 			if (!(cmd & 4)) {	// if only not TIME operation, which does not step!
@@ -367,8 +374,10 @@ static void execute_command ( void )
 			// It seems C65 DOS uses this, without this, the pointer maintaince is bad, and soon it will freeze on EQ check somewhere!
 			// That's why I had to introduce some odd workarounds to reset pointers etc manually, which is NOT what F011 would do, I guess!
 			if (cmd & 1) {
+#ifdef DEBUG_FOR_PAUL
 				printf("BEFORE pointer reset: cache_p_cpu=%d cache_p_fdc=%d" NL, cache_p_cpu, cache_p_fdc);
-				cache_p_cpu = 0;
+#endif
+                                cache_p_cpu = 0;
 				cache_p_fdc = 0;
 				DEBUG("FDC: WARN: resetting cache pointers" NL);
 				//status_a |= 32; // turn EQ on
