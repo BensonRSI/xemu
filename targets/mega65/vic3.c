@@ -37,6 +37,7 @@ static Uint32 vic3_rom_palette[0x100];	// the "ROM" palette, for C64 colours (wi
 static Uint32 *palette;			// the selected palette ...
 static Uint8 vic3_palette_nibbles[0x300];
 Uint8 vic3_registers[0x80];		// VIC-3 registers. It seems $47 is the last register. But to allow address the full VIC3 reg I/O space, we use $80 here
+                                        // By now it is used up to $d07f ( some registers are for debugging, see iomap.txt)                                        
 int vic_iomode;				// VIC2/VIC3/VIC4 mode
 int scanline;				// current scan line number
 int cpu_cycles_per_scanline;
@@ -87,7 +88,8 @@ static inline void PIXEL_POINTER_FINAL_ASSERT ( Uint32 *p )
 
 
 
-
+static void vic3_write_screen_address(Uint32 screen_adr);
+static void vic3_write_line_length(Uint32 line_length);
 
 void vic3_init ( void )
 {
@@ -113,6 +115,8 @@ void vic3_init ( void )
 		vic3_palette_nibbles[i + 0x100] = 0;
 		vic3_palette_nibbles[i + 0x200] = 0;
 	}
+        vic3_write_line_length(80);  // Initial linelenght 80 chars
+        vic3_write_screen_address(0x0800); // Initial Screen position $0800
 	// *** the ROM palette "fixed" colours
 	vic3_rom_palette[ 0] = RGB( 0,  0,  0);	// black
 	vic3_rom_palette[ 1] = RGB(15, 15, 15);	// white
@@ -172,6 +176,7 @@ void vic3_check_raster_interrupt ( void )
 void vic3_write_reg ( int addr, Uint8 data )
 {
 	Uint8 old_data;
+        Uint32 screen_adr;
 	addr &= vic_iomode ? 0x7F : 0x3F;
 	old_data = vic3_registers[addr];
 	DEBUG("VIC3: write reg $%02X with data $%02X" NL, addr, data);       
@@ -204,12 +209,19 @@ void vic3_write_reg ( int addr, Uint8 data )
 	switch (addr) {
 		case 0x11:
 			compare_raster = (compare_raster & 0xFF) | ((data & 128) ? 0x100 : 0);
+                        screen_adr=((vic3_registers[0x18] & 0xE0) << 6) + vic2_16k_bank;
+                        vic3_write_screen_address(screen_adr);   // Each writing to $d011 triggers setting the screen address registers and the line_lenght. Don't know if this is a bug ?
+                        vic3_write_line_length((vic3_registers[0x31] & 128) ? 40 : 80);
 			DEBUG("VIC3: compare raster is now %d" NL, compare_raster);
 			break;
 		case 0x12:
 			compare_raster = (compare_raster & 0xFF00) | data;
 			DEBUG("VIC3: compare raster is now %d" NL, compare_raster);
 			break;
+                case 0x18:   // If screen base is written, the screen RAM precise base address is written , too.
+                        screen_adr=((vic3_registers[0x18] & 0xE0) << 6) + vic2_16k_bank;
+                        vic3_write_screen_address(screen_adr);
+                        break;
 		case 0x19:
 			interrupt_status = interrupt_status & (~data) & 15;
 			vic3_interrupt_checker();
@@ -307,8 +319,21 @@ Uint8 vic3_read_reg ( int addr )
 }
 
 
+static void vic3_write_screen_address(Uint32 screen_adr){
+    
+        vic3_registers[0x60]=screen_adr&0xff;  
+        vic3_registers[0x61]=(screen_adr>>8)&0xff;
+        vic3_registers[0x62]=(screen_adr>>16)&0xff;
+        vic3_registers[0x63]=(screen_adr>>24)&0xff;
 
+}
 
+static void vic3_write_line_length(Uint32 line_length){
+
+        vic3_registers[0x58]=line_length&0xff;  
+        vic3_registers[0x59]=(line_length>>8)&0xff;
+
+}
 
 // "num" is 0-$ff for red, $100-$1ff for green and $200-$2ff for blue nibbles
 void vic3_write_palette_reg ( int num, Uint8 data )
@@ -361,23 +386,41 @@ static inline void vic2_render_screen_text ( Uint32 *p, int tail )
 	Uint8 *chrg = vic2_get_chargen_pointer();
 	int inc_p = (vic3_registers[0x54] & 1) ? 2 : 1;	// VIC-IV (Mega-65) 16 bit text mode?
 	int scanline = 0;
+        Uint16 line_length;
 	if (vic3_registers[0x31] & 128) { // check H640 bit: 80 column mode?
 		xlim = 79;
 		ylim = 24;
 		// Note: VIC2 sees ROM at some addresses thing is not emulated yet for other thing than chargen memory!
 		// Note: according to the specification bit 4 has no effect in 80 columns mode!
-		vidp = memory + ((vic3_registers[0x18] & 0xE0) << 6) + vic2_16k_bank;
+		//vidp = memory + ((vic3_registers[0x18] & 0xE0) << 6) + vic2_16k_bank;
+                
+                // Screen-Ram adress is available in $d060..$d063 , this is updated, everytime $d011 or $d018 is written.
+                vidp = memory + (vic3_registers[0x60]+(vic3_registers[0x61]<<8)+(vic3_registers[0x62]<<16));
+                if (vidp==memory){
+                    // This is quite ugly, but hypervisior / kickstart does not use $d060-$d062
+                    vidp = memory + ((vic3_registers[0x18] & 0xE0) << 6) + vic2_16k_bank;
+                  //  printf("Using workaround\n");
+                }
 		sprite_pointers = vidp + 2040;
 	} else {
 		xlim = 39;
 		ylim = 24;
 		// Note: VIC2 sees ROM at some addresses thing is not emulated yet for other thing than chargen memory!
-		vidp = memory + ((vic3_registers[0x18] & 0xF0) << 6) + vic2_16k_bank;
+		//vidp = memory + ((vic3_registers[0x18] & 0xF0) << 6) + vic2_16k_bank;
+
+                // Screen-Ram adress is available in $d060..$d063 , this is updated, everytime $d011 or $d018 is written.
+                vidp = memory + (vic3_registers[0x60]+(vic3_registers[0x61]<<8)+(vic3_registers[0x62]<<16));
+                if (vidp==memory){
+                    // This is quite ugly, but hypervisior / kickstart does not use $d060-$d062
+                    vidp = memory + ((vic3_registers[0x18] & 0xF0) << 6) + vic2_16k_bank;
+                    //printf("Using workaround2\n");
+                }
 		sprite_pointers = vidp + 1016;
 	}
 	// Target SDL pixel related format for the background colour
 	bg = palette[BG_FOR_Y(0)];
 	PIXEL_POINTER_CHECK_INIT(p, tail, "vic2_render_screen_text");
+
 	for (;;) {
 		Uint8 coldata = *colp;
 		Uint32 fg;
@@ -391,7 +434,7 @@ static inline void vic2_render_screen_text ( Uint32 *p, int tail )
 				// FIXME: however in the current situation we can't do that since of the "fixed" line length for 80 or 40 chars ... :(
 				p += xlim == 39 ? 16 : 8;	// so we just ignore ... FIXME !!
 			} else {
-                                // Mega65 has some extra fetzures for mirroring chars in x and y direction:
+                                // Mega65 has some extra features for mirroring chars in x and y direction:
                                 // -- First colour RAM byte has vertical controls
                                 //glyph_flip_vertical <= colourramdata(7);
                                 //glyph_flip_horizontal <= colourramdata(6);
@@ -465,7 +508,7 @@ static inline void vic2_render_screen_text ( Uint32 *p, int tail )
 				coldata &= 15;
 			fg = palette[coldata];
 			// FIXME: no ECM, MCM stuff ...
-			if (xlim == 79) {
+			if (xlim == 79) {  
 				PIXEL_POINTER_CHECK_ASSERT(p + 7);
 				*(p++) = chrdata & 128 ? fg : bg;
 				*(p++) = chrdata &  64 ? fg : bg;
@@ -493,15 +536,19 @@ static inline void vic2_render_screen_text ( Uint32 *p, int tail )
 		if (x == xlim) {
 			p += tail;
 			x = 0;
+                        vidp -= (xlim + 1) * inc_p;
+                        colp -= (xlim + 1) * inc_p;
 			if (charline == 7) {
 				if (y == ylim)
 					break;
 				y++;
 				charline = 0;
+                                line_length=(vic3_registers[0x58]+(vic3_registers[0x59]<<8));  // linelength in bytes, means doubled length for 16-bit per char
+                                vidp += line_length;
+                                colp += line_length;
+                                
 			} else {
 				charline++;
-				vidp -= (xlim + 1) * inc_p;
-				colp -= (xlim + 1) * inc_p;
 			}
 			bg = palette[BG_FOR_Y(++scanline)];
 		} else
