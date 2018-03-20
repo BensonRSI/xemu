@@ -244,7 +244,7 @@ void dma_extended_list( void ){
 #endif
             do{
               list_val=read_dma_list_next();
-              printf("DMA: Extendedlist List value is $%02X now\n", list_val);
+              DEBUG("DMA: Extendedlist List value is $%02X now\n", list_val);
               switch(list_val){
                   case 0x0a:  // Request Format is Revison A
                       dma_chip_revision=0;
@@ -286,7 +286,7 @@ void dma_extended_list( void ){
                   case 0x00:  // This ends Extended-DMA-List
                       break; 
                   case 0x8d:  // Whatever 
-                        printf("DMA reads 8d 0x%02x%02x\n",read_dma_list_next(),read_dma_list_next());
+                      DEBUG("DMA reads 8d 0x%02x%02x\n",read_dma_list_next(),read_dma_list_next());
                       break;
                   default:
                       /* Something is going wrong here. Either List adress was false, or values are mixed up
@@ -308,7 +308,6 @@ void dma_write_reg ( int addr, Uint8 data )
 	// The following condition is commented out for now. FIXME: how it is handled for real?!
 	//if (vic_iomode != VIC4_IOMODE)
 	//	addr &= 3;
-        printf ("Write DMA Reg 0x%02x with 0x%02x \n", addr ,data);
         DEBUG ("Write DMA Reg 0x%02x with 0x%02x \n", addr ,data);
 #ifdef MEGA65
 	dma_registers[addr] = data;
@@ -362,14 +361,12 @@ void dma_write_reg ( int addr, Uint8 data )
             extended_list=1;
             dma_list_addr = dma_registers[5] | (dma_registers[1] << 8) | ((dma_registers[2] & 15) << 16);
             DEBUG("DMA: Extendedlist Listaddres is [MB=$%02X]$%06X now" NL, list_megabyte >> 20, dma_list_addr);
-            printf("DMA: Extendedlist Listaddres is [MB=$%02X]$%06X now\n" NL, list_megabyte >> 20, dma_list_addr);
         }
 #else	
         dma_list_addr = dma_registers[0] | (dma_registers[1] << 8) | ((dma_registers[2] & 15) << 16);
         command = -1;           // signal dma_update() that it's needed to fetch the DMA command, no command is fetched yet
 #endif
 	DEBUG("DMA: list address is [MB=$%02X]$%06X now, just written to register %d value $%02X" NL, list_megabyte >> 20, dma_list_addr, addr, data);
-        printf("DMA: list address is [MB=$%02X]$%06X now, just written to register %d value $%02X\n" NL, list_megabyte >> 20, dma_list_addr, addr, data);
 	dma_status = 0x80;	// DMA is busy now, also to signal the emulator core to call dma_update() in its main loop
 	dma_update_all();	// DMA _stops_ CPU, however FIXME: interrupts can (???) occur, so we need to emulate that somehow later?
 }
@@ -438,7 +435,7 @@ void dma_update ( void )
 		modulo       = read_dma_list_next()      ;	// modulo is not so much handled yet, maybe it's not even a 16 bit value
 		modulo      |= read_dma_list_next() <<  8;	// ... however since it's currently not used, it does not matter too much
                 DEBUG("DMA: list content, command:0x%02x length:0x%04x source:0x%02x%04x target:0x%02x%04x modulo:0x%02x" NL,command,length,source_megabyte,source_addr,target_megabyte,target_addr,modulo );
- 		
+		
 		if (dma_chip_revision) {
 			// F018B ("new") behaviour
 			source_step  = (command & 16) ? -1 : 1;
@@ -469,13 +466,13 @@ void dma_update ( void )
 			source_writer	= cb_source_iowriter;
 			source_mask	= 0xFFF;	// 4K I/O size
 			source_cur_megabyte	= dma_phys_io_offset;
-                        printf("DMA: source  IO, command:0x%02x length:0x%04x source:0x%06x target:0x%06x modulo:0x%02x" NL,command,length,source_megabyte+source_addr,target_cur_megabyte+target_addr,modulo );
+                        DEBUG("DMA: source  IO, command:0x%02x length:0x%04x source:0x%06x target:0x%06x modulo:0x%02x" NL,command,length,source_megabyte+source_addr,target_cur_megabyte+target_addr,modulo );
 		} else {
 			source_reader	= cb_source_mreader;
 			source_writer	= cb_source_mwriter;
 			source_mask	= 0xFFFFF;	// 1Mbyte of "Mbyte slice" size
 			source_cur_megabyte = (source_megabyte<<20);
-                        printf("DMA: source  MEM, command:0x%02x length:0x%04x source:0x%06x target:0x%06x modulo:0x%02x" NL,command,length,source_megabyte+source_addr,target_cur_megabyte+target_addr,modulo );
+                        DEBUG("DMA: source  MEM, command:0x%02x length:0x%04x source:0x%06x target:0x%06x modulo:0x%02x" NL,command,length,source_megabyte+source_addr,target_cur_megabyte+target_addr,modulo );
 		}
 		/* target selection */
 		if (target_is_io) {
@@ -483,13 +480,13 @@ void dma_update ( void )
 			target_writer	= cb_target_iowriter;
 			target_mask	= 0xFFF;	// 4K I/O size
 			target_cur_megabyte	= dma_phys_io_offset;
-                        printf("DMA: target IO, command:0x%02x length:0x%04x source:0x%06x target:0x%06x modulo:0x%02x" NL,command,length,source_megabyte+source_addr,target_cur_megabyte+target_addr,modulo );
+                        DEBUG("DMA: target IO, command:0x%02x length:0x%04x source:0x%06x target:0x%06x modulo:0x%02x" NL,command,length,source_megabyte+source_addr,target_cur_megabyte+target_addr,modulo );
 		} else {
 			target_reader	= cb_target_mreader;
 			target_writer	= cb_target_mwriter;
 			target_mask	= 0xFFFFF;	// 1Mbyte of "Mbyte slice" size
 			target_cur_megabyte = (target_megabyte<<20);
-                        printf("DMA: target  MEM, command:0x%02x length:0x%04x source:0x%06x target:0x%06x modulo:0x%02x" NL,command,length,source_megabyte+source_addr,target_cur_megabyte+target_addr,modulo );
+                        DEBUG("DMA: target  MEM, command:0x%02x length:0x%04x source:0x%06x target:0x%06x modulo:0x%02x" NL,command,length,source_megabyte+source_addr,target_cur_megabyte+target_addr,modulo );
 		}
 		/* other stuff */
 		chained = (command & 4);
@@ -528,7 +525,7 @@ void dma_update ( void )
 			if (extended_list){ 
                             command = -2;           // signal for next DMA fetch extended - list
                         }else
-#endif                  
+#endif
                         command = -1;              // signal for next DMA command fetch
 		} else {
 			DEBUG("DMA: end of operation, no chained next one." NL);
@@ -544,8 +541,7 @@ void dma_update ( void )
                         transparency_on=0;
                         transparency_val=0;
 
-#endif        
-                          
+#endif
 		}
 	}
 }
@@ -587,7 +583,7 @@ void dma_reset ( void )
 	source_megabyte = 0;
 	target_megabyte = 0;
 	list_megabyte = 0;
-#ifdef MEGA65        
+#ifdef MEGA65
         source_step_fraction=0x100;        // Cleanup after DMA is done. Everything is back to initial-state   
         target_step_fraction=0x100;
         source_step_remain=0;
