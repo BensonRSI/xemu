@@ -66,7 +66,11 @@ static int   dma_list_addr;		// Current address of the DMA list, controller will
 static Uint8 minterms[4];		// Used with MIX DMA command only
        Uint8 dma_status;
 //static int   mb_list, mb_source, mb_target;
-
+#ifdef MEGA65
+static int   transparency_on=0;           // DMA uses tranperency byte
+static int   transparency_val=0;          // DMA      tranperency byte
+static int   extended_list=0;          // DMA     using the Extendedlist
+#endif
 
 // These are call-backs, emulator is initialized with, and the set, a DMA operation can choose from, see below
 // See dma_init()
@@ -89,6 +93,7 @@ static dma_writer_cb_t source_writer;
 static dma_writer_cb_t target_writer;
 // ...
 static int source_mask, target_mask, source_megabyte, target_megabyte, list_megabyte;
+static int source_cur_megabyte=0, target_cur_megabyte=0;
 static int dma_phys_io_offset, dma_phys_io_offset_default = 0;
 
 int calc_fractional_step(int step, int fraction, int * remainder){
@@ -114,7 +119,7 @@ static INLINE Uint8 read_source_next ( void )
 	// a physical address for I/O which also contains an offset within the "mbyte slice"
 	// range as well (ie, mega65 uses I/O areas mapped in the $FF megabyte area, for
 	// various I/O modes)
-        Uint8 result = source_reader((source_addr & source_mask) + source_megabyte);
+        Uint8 result = source_reader((source_addr & source_mask) + source_cur_megabyte);
 
 #ifdef MEGA65
         source_addr += calc_fractional_step(source_step,source_step_fraction,&source_step_remain);
@@ -129,12 +134,15 @@ static INLINE Uint8 read_source_next ( void )
 static INLINE void write_target_next ( Uint8 data )
 {
 	// See the comment at read_source_next()
-	target_writer((target_addr & target_mask) + target_megabyte, data);
+#ifdef MEGA65
+        if ((!transparency_on) || (transparency_val != data))
+#endif
+            target_writer((target_addr & target_mask) + target_cur_megabyte, data);
 #ifdef MEGA65
         target_addr += calc_fractional_step(target_step,target_step_fraction,&target_step_remain);
-#else        
+#else
         target_addr += target_step;
-#endif        
+#endif
 }
 
 
@@ -142,10 +150,15 @@ static INLINE void write_target_next ( Uint8 data )
 static INLINE void swap_next ( void )
 {
 	// See the comment at read_source_next()
-	Uint8 sa = source_reader((source_addr & source_mask) + source_megabyte);
-	Uint8 da = target_reader((target_addr & target_mask) + target_megabyte);
-	source_writer((source_addr & source_mask) + source_megabyte, da);
-	target_writer((target_addr & target_mask) + target_megabyte, sa);
+	Uint8 sa = source_reader((source_addr & source_mask) + source_cur_megabyte);
+	Uint8 da = target_reader((target_addr & target_mask) + target_cur_megabyte);
+#ifdef MEGA65
+        if ((!transparency_on) || (transparency_val != sa) || (transparency_val != da))
+#endif
+        {
+            source_writer((source_addr & source_mask) + source_cur_megabyte, da);
+            target_writer((target_addr & target_mask) + target_cur_megabyte, sa);
+        }
 	source_addr += source_step;
 	target_addr += target_step;
 }
@@ -155,8 +168,8 @@ static INLINE void swap_next ( void )
 static INLINE void mix_next ( void )
 {
 	// See the comment at read_source_next()
-	Uint8 sa = source_reader((source_addr & source_mask) + source_megabyte);
-	Uint8 da = target_reader((target_addr & target_mask) + target_megabyte);
+	Uint8 sa = source_reader((source_addr & source_mask) + source_cur_megabyte);
+	Uint8 da = target_reader((target_addr & target_mask) + target_cur_megabyte);
 	// NOTE: it's not clear from the specification, what MIX
 	// does. I assume, that it does some kind of minterm
 	// with source and target and writes the result to
@@ -168,7 +181,10 @@ static INLINE void mix_next ( void )
 		((~sa) & ( da) & minterms[1]) |
 		((~sa) & (~da) & minterms[0]) ;
 	// See the comment at read_source_next()
-	target_writer((target_addr & target_mask) + target_megabyte, da);
+#ifdef MEGA65
+        if ((!transparency_on) || (transparency_val != da))
+#endif
+            target_writer((target_addr & target_mask) + target_cur_megabyte, da);
 	source_addr += source_step;
 	target_addr += target_step;	
 }
@@ -178,7 +194,7 @@ static INLINE void mix_next ( void )
 static INLINE Uint8 read_dma_list_next ( void )
 {
 	// Unlike the functions above, DMA list read is always memory (not I/O)
-	// Also the "step" is always one. So it's a bit special case ....
+	// Also the "step" is always one. So it's a bit special case 
 	return list_reader(((dma_list_addr++) & 0xFFFFF) + list_megabyte);
 }
 
@@ -193,23 +209,116 @@ static void dma_update_all ( void )
 	}
 }
 
+#ifdef MEGA65
+void dma_extended_list( void ){
+
+            Uint8 list_val;
+ 
+            DEBUG("DMA: Extendedlist fetching at Listaddres is [MB=$%02X]$%06X \n" NL, list_megabyte >> 20, dma_list_addr);
+#if 0
+                // Ugly workaround for outdated kickstart, it still uses d705 for Source Megabyte and d706 for Target Megabyte
+            if (dma_list_addr+list_megabyte==0xfff0000){
+                source_megabyte=(int)dma_registers[5] << 20;
+                return;
+            }
+            if (dma_list_addr+list_megabyte==0xfff9aff){
+                source_megabyte=(int)dma_registers[5] << 20;
+                return;
+            }
+            if (dma_list_addr+list_megabyte==0xfff9400){
+                source_megabyte=(int)dma_registers[5] << 20;
+                return;
+            }
+            if (dma_list_addr+list_megabyte==0xfff9b00){
+                source_megabyte=(int)dma_registers[5] << 20;
+                return;
+            }
+            if (dma_list_addr+list_megabyte==0xfff9a00){
+                source_megabyte=(int)dma_registers[5] << 20;
+                return;
+            }
+            if (dma_list_addr+list_megabyte==0xfffa800){
+                source_megabyte=(int)dma_registers[5] << 20;
+                return;
+            }
+#endif
+            do{
+              list_val=read_dma_list_next();
+              printf("DMA: Extendedlist List value is $%02X now\n", list_val);
+              switch(list_val){
+                  case 0x0a:  // Request Format is Revison A
+                      dma_chip_revision=0;
+                      break;
+                  case 0x0b:  // Request Format is Revison B
+                      dma_chip_revision=1;
+                      break;
+                  case 0x80:  // Set MB of source address
+                      source_megabyte=read_dma_list_next();
+                      break;
+                  case 0x81:  // Set MB of source address
+                      target_megabyte=read_dma_list_next(); 
+                      break;
+                  case 0x82:  // Set lowerbyte of source fractional stepping
+                      source_step_fraction&=0xff00;
+                      source_step_fraction|=read_dma_list_next();
+                      break;
+                  case 0x83:  // Set higherbyte of source fractional stepping
+                      source_step_fraction&=0x00ff;
+                      source_step_fraction|=(read_dma_list_next())<<8;
+                      break;
+                  case 0x84:  // Set lowerbyte of target fractional stepping
+                      target_step_fraction&=0xff00;
+                      target_step_fraction|=read_dma_list_next();
+                      break;
+                  case 0x85:  // Set higherbyte of source fractional stepping
+                      target_step_fraction&=0x00ff;
+                      target_step_fraction|=(read_dma_list_next())<<8;
+                      break;
+                  case 0x06:  // switch on transperency mode (don't write source bytes to destination, if byte value matches $xx)
+                      transparency_on=1;
+                      break;
+                  case 0x07:  // switch off transperency mode
+                      transparency_on=0;
+                      break;
+                  case 0x86:  // Set higherbyte of source fractional stepping
+                      transparency_val=(read_dma_list_next());
+                      break;
+                  case 0x00:  // This ends Extended-DMA-List
+                      break; 
+                  case 0x8d:  // Whatever 
+                        printf("DMA reads 8d 0x%02x%02x\n",read_dma_list_next(),read_dma_list_next());
+                      break;
+                  default:
+                      /* Something is going wrong here. Either List adress was false, or values are mixed up
+                       * Better not doing the DMA */
+                      FATAL("Unexpected Value 0x%02x in extended DMA-List at 0x%02x%04x",list_val,list_megabyte >>20,dma_list_addr);
+
+                      return;
+                      break;
+              }
+            }while(list_val);   // a 0 will end the list
+        DEBUG("DMA: Extendedlist finished Listaddres is [MB=$%02X]$%06X now" NL, list_megabyte >> 20, dma_list_addr);
 
 
+}
+#endif
 void dma_write_reg ( int addr, Uint8 data )
 {
 	// DUNNO about DMAgic too much. It's merely guessing from my own ROM assembly tries, C65gs/Mega65 VHDL, and my ideas :)
 	// The following condition is commented out for now. FIXME: how it is handled for real?!
 	//if (vic_iomode != VIC4_IOMODE)
 	//	addr &= 3;
+        printf ("Write DMA Reg 0x%02x with 0x%02x \n", addr ,data);
+        DEBUG ("Write DMA Reg 0x%02x with 0x%02x \n", addr ,data);
 #ifdef MEGA65
 	dma_registers[addr] = data;
 	switch (addr) {
 		case 0x2:	// for compatibility with C65, Mega65 here resets the MB part of the DMA list address
 			dma_registers[4] = 0;	// this is the "MB" part of the DMA list address (hopefully ...)
 			break;
-		case 0xE:	// Set low order bits of DMA list address, without starting (Mega65 feature, but without VIC4 new mode, this reg will never addressed here anyway)
-			dma_registers[0] = data;
-			break;
+                case 0xE:       // Set low order bits of DMA list address, without starting (Mega65 feature, but without VIC4 new mode, this reg will never addressed here anyway)
+                        dma_registers[0] = data;
+                        break;
 	}
 #else
 	if (addr > 3) {	// in case of C65, the extended registers cannot be written
@@ -218,7 +327,11 @@ void dma_write_reg ( int addr, Uint8 data )
 	}
 	dma_registers[addr] = data;
 #endif
+#ifdef MEGA65
+        if ((addr!=0x00)&&(addr!=0x05))
+#else
 	if (addr)
+#endif
 		return;	// Only writing register 0 starts the DMA operation, otherwise just return from this function (reg write already happened)
 	if (dma_status) {
 		DEBUG("DMA: WARNING: previous operation is in progress, WORKAROUND: finishing first." NL);
@@ -230,13 +343,34 @@ void dma_write_reg ( int addr, Uint8 data )
 		// * I/O redirection as target affecting the DMA registers can create a stack overflow in the emulator code :)
 		dma_update_all();
 	}
-	dma_list_addr = dma_registers[0] | (dma_registers[1] << 8) | ((dma_registers[2] & 15) << 16);
 #ifdef MEGA65
-	list_megabyte = (int)dma_registers[4] << 20;	// the "MB" part to select MegaByte range for the DMA list reading
+        /* Write to Register D705 starts DMA with extended DMA-list 
+         * It has features like fractional stepping or transparency-mode 
+         */
+        list_megabyte = (int)dma_registers[4] << 20;    // the "MB" part to select MegaByte range for the DMA list reading
+        if (addr==0x00){
+            command = -1;           // signal dma_update() that it's needed to fetch the DMA command, no command is fetched yet
+            extended_list=0;
+            dma_list_addr = dma_registers[0] | (dma_registers[1] << 8) | ((dma_registers[2] & 15) << 16);
+            DEBUG("DMA: Listaddres is [MB=$%02X]$%06X now" NL, list_megabyte >> 20, dma_list_addr);
+        }
+        if (addr==0x05){ 
+            if (data == 0){    // ugly workaround for using d705 as megabyte offset
+                return;
+            }
+            command = -2;           // signal dma_update() that it's needed to fetch the DMA extended list , no command is fetched yet
+            extended_list=1;
+            dma_list_addr = dma_registers[5] | (dma_registers[1] << 8) | ((dma_registers[2] & 15) << 16);
+            DEBUG("DMA: Extendedlist Listaddres is [MB=$%02X]$%06X now" NL, list_megabyte >> 20, dma_list_addr);
+            printf("DMA: Extendedlist Listaddres is [MB=$%02X]$%06X now\n" NL, list_megabyte >> 20, dma_list_addr);
+        }
+#else	
+        dma_list_addr = dma_registers[0] | (dma_registers[1] << 8) | ((dma_registers[2] & 15) << 16);
+        command = -1;           // signal dma_update() that it's needed to fetch the DMA command, no command is fetched yet
 #endif
 	DEBUG("DMA: list address is [MB=$%02X]$%06X now, just written to register %d value $%02X" NL, list_megabyte >> 20, dma_list_addr, addr, data);
+        printf("DMA: list address is [MB=$%02X]$%06X now, just written to register %d value $%02X\n" NL, list_megabyte >> 20, dma_list_addr, addr, data);
 	dma_status = 0x80;	// DMA is busy now, also to signal the emulator core to call dma_update() in its main loop
-	command = -1;		// signal dma_update() that it's needed to fetch the DMA command, no command is fetched yet
 	dma_update_all();	// DMA _stops_ CPU, however FIXME: interrupts can (???) occur, so we need to emulate that somehow later?
 }
 
@@ -281,6 +415,12 @@ void dma_update ( void )
 	Uint8 subcommand;
 	if (!dma_status)
 		return;
+#ifdef MEGA65
+        if (command == -2) {
+            dma_extended_list();
+            command = -1;
+        }
+#endif
 	if (command == -1) {
 		// command == -1 signals the situation, that the (next) DMA command should be read!
 		// This part is highly incorrect, ie fetching so many bytes in one step only of dma_update()
@@ -297,6 +437,8 @@ void dma_update ( void )
 			subcommand = read_dma_list_next();
 		modulo       = read_dma_list_next()      ;	// modulo is not so much handled yet, maybe it's not even a 16 bit value
 		modulo      |= read_dma_list_next() <<  8;	// ... however since it's currently not used, it does not matter too much
+                DEBUG("DMA: list content, command:0x%02x length:0x%04x source:0x%02x%04x target:0x%02x%04x modulo:0x%02x" NL,command,length,source_megabyte,source_addr,target_megabyte,target_addr,modulo );
+ 		
 		if (dma_chip_revision) {
 			// F018B ("new") behaviour
 			source_step  = (command & 16) ? -1 : 1;
@@ -308,12 +450,6 @@ void dma_update ( void )
 			// F018A ("old") behaviour
 			source_step  = (source_addr & 0x100000) ? 0 : ((source_addr & 0x400000) ? -1 : 1);
                         target_step  = (target_addr & 0x100000) ? 0 : ((target_addr & 0x400000) ? -1 : 1);
-#ifdef MEGA65
-                        source_step_fraction=dma_registers[8]  + (dma_registers[9]  <<8);                          
-                        target_step_fraction=dma_registers[10] + (dma_registers[11] <<8);   
-                        source_step_remain=0;
-                        target_step_remain=0;
-#endif                        
 			source_uses_modulo = (source_addr & 0x200000);
 			target_uses_modulo = (target_addr & 0x200000);
 			minterms[0] = (command &  16) ? 0xFF : 0x00;
@@ -332,28 +468,28 @@ void dma_update ( void )
 			source_reader	= cb_source_ioreader;
 			source_writer	= cb_source_iowriter;
 			source_mask	= 0xFFF;	// 4K I/O size
-			source_megabyte	= dma_phys_io_offset;
+			source_cur_megabyte	= dma_phys_io_offset;
+                        printf("DMA: source  IO, command:0x%02x length:0x%04x source:0x%06x target:0x%06x modulo:0x%02x" NL,command,length,source_megabyte+source_addr,target_cur_megabyte+target_addr,modulo );
 		} else {
 			source_reader	= cb_source_mreader;
 			source_writer	= cb_source_mwriter;
 			source_mask	= 0xFFFFF;	// 1Mbyte of "Mbyte slice" size
-#ifdef MEGA65
-			source_megabyte	= (int)dma_registers[5] << 20;
-#endif
+			source_cur_megabyte = (source_megabyte<<20);
+                        printf("DMA: source  MEM, command:0x%02x length:0x%04x source:0x%06x target:0x%06x modulo:0x%02x" NL,command,length,source_megabyte+source_addr,target_cur_megabyte+target_addr,modulo );
 		}
 		/* target selection */
 		if (target_is_io) {
 			target_reader	= cb_target_ioreader;
 			target_writer	= cb_target_iowriter;
 			target_mask	= 0xFFF;	// 4K I/O size
-			target_megabyte	= dma_phys_io_offset;
+			target_cur_megabyte	= dma_phys_io_offset;
+                        printf("DMA: target IO, command:0x%02x length:0x%04x source:0x%06x target:0x%06x modulo:0x%02x" NL,command,length,source_megabyte+source_addr,target_cur_megabyte+target_addr,modulo );
 		} else {
 			target_reader	= cb_target_mreader;
 			target_writer	= cb_target_mwriter;
 			target_mask	= 0xFFFFF;	// 1Mbyte of "Mbyte slice" size
-#ifdef MEGA65
-			target_megabyte	= (int)dma_registers[6] << 20;
-#endif
+			target_cur_megabyte = (target_megabyte<<20);
+                        printf("DMA: target  MEM, command:0x%02x length:0x%04x source:0x%06x target:0x%06x modulo:0x%02x" NL,command,length,source_megabyte+source_addr,target_cur_megabyte+target_addr,modulo );
 		}
 		/* other stuff */
 		chained = (command & 4);
@@ -388,16 +524,26 @@ void dma_update ( void )
 		if (chained) {			// chained?
 			DEBUG("DMA: end of operation, but chained!" NL);
 			dma_status = 0x81;	// still busy then, with also bit0 set (chained)
-			command = -1;		// signal for next DMA command fetch
+#ifdef MEGA65
+			if (extended_list){ 
+                            command = -2;           // signal for next DMA fetch extended - list
+                        }else
+#endif                  
+                        command = -1;              // signal for next DMA command fetch
 		} else {
 			DEBUG("DMA: end of operation, no chained next one." NL);
 			dma_status = 0;		// end of DMA command
 			command = -1;
 #ifdef MEGA65
-                        dma_registers[8]=0;        // Initialize fractional stepping to 1     
-                        dma_registers[9]=1;
-                        dma_registers[10]=0;    
-                        dma_registers[11]=1;    
+                        source_step_fraction=0x100;        // Cleanup after DMA is done. Everything is back to initial-state   
+                        target_step_fraction=0x100;
+                        source_step_remain=0;
+                        target_step_remain=0;
+                        source_megabyte=0;
+                        target_megabyte=0;
+                        transparency_on=0;
+                        transparency_val=0;
+
 #endif        
                           
 		}
@@ -408,10 +554,6 @@ void dma_update ( void )
 void dma_set_phys_io_offset ( int offs )
 {
 	dma_phys_io_offset_default = dma_phys_io_offset = offs;
-	if (source_is_io)
-		source_megabyte = offs;
-	if (target_is_io)
-		target_megabyte = offs;
 }
 
 
@@ -442,13 +584,16 @@ void dma_reset ( void )
 	command = -1;	// no command is fetched yet
 	dma_status = 0;
 	memset(dma_registers, 0, sizeof dma_registers);
-#ifdef MEGA65
-        dma_registers[9]=1;        // Initialize fractional stepping to 1     
-        dma_registers[11]=1;    
-#endif        
 	source_megabyte = 0;
 	target_megabyte = 0;
 	list_megabyte = 0;
+#ifdef MEGA65        
+        source_step_fraction=0x100;        // Cleanup after DMA is done. Everything is back to initial-state   
+        target_step_fraction=0x100;
+        source_step_remain=0;
+        target_step_remain=0;
+#endif
+
 	dma_phys_io_offset = dma_phys_io_offset_default;
 }
 

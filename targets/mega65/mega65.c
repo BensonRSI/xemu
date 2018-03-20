@@ -45,6 +45,7 @@ struct Cia6526 cia1, cia2;		// CIA emulation structures for the two CIAs
 struct SidEmulation sid1, sid2;		// the two SIDs
 int cpu_linear_memory_addressing_is_enabled = 0;
 static int nmi_level;			// please read the comment at nmi_set() below
+int alt_key_pressed = 1;                // Is cleared on first call of Keyboard scan-routine
 
 
 // We re-map I/O requests to a high address space does not exist for real. cpu_read() and cpu_write() should handle this as an IO space request
@@ -370,6 +371,7 @@ static void mega65_init ( int sid_cycles_per_sec, int sound_mix_freq )
 	p = emucfg_get_str("kickup");
 	if (emu_load_file(p, hypervisor_memory, 0x4001) == 0x4000) {
 		DEBUG("MEGA65: %s loaded into hypervisor memory." NL, p);
+                // ;$d67e = register for kickup-state (00=virgin, else already-kicked
 	} else {
 		WARNING_WINDOW("Kickstart %s cannot be found. Using the default (maybe outdated!) built-in version", p);
 		if (sizeof initial_kickup != 0x4000)
@@ -601,6 +603,10 @@ Uint8 io_read ( int addr )
 			if (addr >= 0xD680 && addr <= 0xD693)		// SDcard controller etc of Mega65
 				return sdcard_read_register(addr - 0xD680);
 			switch (addr) {
+                                case 0xD611:                             // Read extended Keyboard-Register ( ALT, CTRL, etc );
+                                    DEBUG ("Read of $d611. Would return 0x%02x" NL, gs_regs[addr & 0xFFF]);
+                                    return gs_regs[addr & 0xFFF];;
+                                    break;
 				case 0xD67E:				// upgraded hypervisor signal
 					if (kicked_hypervisor == 0x80)	// 0x80 means for Xemu (not for a real M65!): ask the user!
 						kicked_hypervisor = QUESTION_WINDOW(
@@ -715,6 +721,7 @@ void io_write ( int addr, Uint8 data )
 		if (vic_iomode == VIC4_IOMODE && addr >= 0xD609) {	// D609 - D6FF: Mega65 suffs
 			gs_regs[addr & 0xFFF] = data;
 			DEBUG("MEGA65: writing Mega65 specific I/O range @ $%04X with $%02X" NL, addr, data);
+
 			if (!in_hypervisor && addr >= 0xD640 && addr <= 0xD67F) {
 				// In user mode, writing to $D640-$D67F (in VIC4 iomode) causes to enter hypervisor mode with
 				// the trap number given by the offset in this range
@@ -722,7 +729,7 @@ void io_write ( int addr, Uint8 data )
 				return;
 			}
 			if (addr >= 0xD680 && addr <= 0xD693) {
-				sdcard_write_register(addr - 0xD680, data);
+				sdcard_write_register(addr - 0xD680, data); 
 				return;
 			}
 			switch (addr) {
@@ -830,6 +837,9 @@ void write_phys_mem ( int addr, Uint8 data )
 	// Normal MAP stuffs does this, since it wraps within a single 1Mbyte "MB" already
 	// However this can be an issue for other users, ie DMA
 	// FIXME: check that at DMAgic, also the situation that DMAgic can/should/etc wrap at all on MB ranges, and on 256Mbyte too!
+
+        //printf ("Write 0x%02x to 0x%06x  %d\n",data,addr,in_hypervisor); //0xfffbf10
+
 	addr &= 0xFFFFFFF;		// warps around at 256Mbyte, for address bus of Mega65
 	if (addr < 0x000002) {
 		if ((CPU_PORT(addr) & 7) != (data & 7)) {
@@ -882,6 +892,7 @@ void write_phys_mem ( int addr, Uint8 data )
 		return;
 	}
 	if ((addr & 0xFFFC000) == 0xFFF8000) {			// accessing of hypervisor memory
+                DEBUG ("Write 0x%02x to 0x%06x  %d" NL,data,addr,in_hypervisor); //0xfffbf10
 		if (in_hypervisor)	// hypervisor memory is unavailable from "user mode", FIXME: do we need to do trap/whatever if someone tries this?
 			hypervisor_memory[addr & 0x3FFF] = data;
 		return;
@@ -929,7 +940,9 @@ void write_phys_mem ( int addr, Uint8 data )
 
 Uint8 read_phys_mem ( int addr )
 {
+       // printf ("Read from 0x%06x  %d\n",addr,in_hypervisor); //0xfffbf10
 	addr &= 0xFFFFFFF;		// warps around at 256Mbyte, for address bus of Mega65
+
 	//Check for < 2 not needed anymore, as CPU port is really the memory, though it can be a problem if DMA sees this issue differently?!
 	//if (addr < 0x000002)
 	//	return CPU_PORT(addr);
@@ -1065,6 +1078,8 @@ void reset_machine(void){
 	cpu_reset();
 	dma_reset();
 	nmi_level = 0;
+        io_write(0xD610,0);  // Reset-keypresses
+        io_write(0xD611,0);
 	kicked_hypervisor = emucfg_get_num("kicked");
 	hypervisor_enter(TRAP_RESET);
 	DEBUG("RESET!" NL);
@@ -1075,15 +1090,35 @@ void reset_machine(void){
 // Called by emutools_hid!!! to handle special private keys assigned to this emulator
 int emu_callback_key ( int pos, SDL_Scancode key, int pressed, int handled )
 {
-	// Check for special, emulator-related hot-keys (not C65 key)
-	if (pressed) {
-		if (key == SDL_SCANCODE_F10) {
-			reset_machine();
-		} else if (key == SDL_SCANCODE_KP_ENTER) {
-			c64_toggle_joy_emu();
-		}
-	}
-	return 0;
+        // Check for special, emulator-related hot-keys (not C65 key)
+        if (pressed) {
+                switch (key){
+                 case SDL_SCANCODE_F10:
+                        reset_machine();
+                        break;
+                 case SDL_SCANCODE_KP_ENTER:
+                        c64_toggle_joy_emu();
+                        break;
+                 case SDL_SCANCODE_LALT:
+                    io_write(0xD611,io_read(0xD611)|0x10);
+                    alt_key_pressed=1;
+                    break;
+                 case SDL_SCANCODE_AC_HOME:  // Is sent, when window is miniminized, ignore it
+                     break;
+
+                 default: 
+                    io_write(0xD610,key+0x13);
+                    DEBUG ("KeyPressed : %d " NL,key+0x13);
+                    break;
+                }
+	}else{
+            if (alt_key_pressed){
+                  io_write(0xD611,io_read(0xD611)&0xEF);
+                  alt_key_pressed=0;
+            }
+        }
+
+        return 0;
 }
 
 

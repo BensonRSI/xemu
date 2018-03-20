@@ -37,6 +37,7 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA */
  * Can be distributed/used/modified under the terms of GNU/GPL 2 (or later), please see file COPYING
  * or visit this page: http://www.gnu.org/licenses/gpl-2.0.html
  */
+//#define DEBUG_CPU
 
 #include "xemu/emutools_basicdefs.h"
 #ifndef CPU_CUSTOM_INCLUDED
@@ -44,8 +45,63 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA */
 #endif
 
 #ifdef DEBUG_CPU
+#ifdef CPU_65CE02
 #include "xemu/cpu65ce02_disasm_tables.c"
 //#include "cpu65ce02_disasm.c
+
+static const char  opcode_adm_off [] = {0    ,1     ,2     ,1   ,2        ,1      ,1      ,2      ,2        ,2        ,3    ,4      ,1        ,1        ,1           ,1        ,2        ,2          ,0  };
+static const char *opcode_adm_pre [] = {""   ,"#$"  ,"#$"  ,"$" ,"$"      ,"$"    ,"$"    ,"$"    ,"$"      ,"$"      ,"$"  ,"$"    ,"($"     ,"($"     ,"($"        ,"($"     ,"($"     ,"($"       ," "};
+static const char *opcode_adm_post[] = {""   ,""    ,""    ,""  ,",$rr"   ,",X"   ,",Y"   ,""     ,",X"     ,",Y"     ,""    ,"" ,"),Y"    ,"),Z"    ,",SP),Y"    ,",X)"    ,")"      ,",X)"      ,"A"};
+                                     //{"","#$nn","#$nnnn","$nn","$nn,$rr","$nn,X","$nn,Y","$nnnn","$nnnn,X","$nnnn,Y","$rr","$rrrr","($nn),Y","($nn),Z","($nn,SP),Y","($nn,X)","($nnnn)","($nnnn,X)","A"};
+ 
+
+ 
+ /***************************************************************************/
+/*   Disassembler */
+/***************************************************************************/
+
+
+Uint16 print_disass_line(Uint16 disass_pc, Uint8 disass_op){
+
+      Uint16 addr_off=opcode_adm_off[opcode_adms[disass_op]];
+
+      switch (addr_off){
+         case 0:  // no extra argument
+                printf(
+                "%04X %s %s%s         \r\n",                          // PC , disambled opcode , prefix , postfix
+                disass_pc, opcode_names[disass_op], opcode_adm_pre[opcode_adms[disass_op]], opcode_adm_post[opcode_adms[disass_op]] );
+                break;
+         case 1: // 8-bit argument
+                printf(
+                "%04X %s %s%02X%s     \r\n",                          // PC , disambled opcode , prefix , postfix
+                disass_pc, opcode_names[disass_op], opcode_adm_pre[opcode_adms[disass_op]],cpu_read(disass_pc+1)&0xff, opcode_adm_post[opcode_adms[disass_op]] );
+                break;
+         case 2: // 16-bit argument
+                printf(
+                "%04X %s %s%02X%02x%s    \r\n",                          // PC , disambled opcode , prefix , postfix
+                disass_pc, opcode_names[disass_op], opcode_adm_pre[opcode_adms[disass_op]],cpu_read(disass_pc+2)&0xff,cpu_read(disass_pc+1)&0xff, opcode_adm_post[opcode_adms[disass_op]] );
+                break;
+         case 3: // 8-bit relative argument
+                printf(
+                "%04X %s %s%04X%s    \r\n",                          // PC , disambled opcode , prefix , postfix
+                disass_pc, opcode_names[disass_op], opcode_adm_pre[opcode_adms[disass_op]],disass_pc+(char)(cpu_read(disass_pc+1)&0xff)+2, opcode_adm_post[opcode_adms[disass_op]] );
+                addr_off=1;
+                break;
+         case 4: // 16-bit releative argument
+                printf(
+                "%04X %s %s%04X%s    \r\n",                          // PC , disambled opcode , prefix , postfix
+                disass_pc, opcode_names[disass_op], opcode_adm_pre[opcode_adms[disass_op]],disass_pc+(int16_t)((cpu_read(disass_pc+1)&0xff)+0x100*(cpu_read(disass_pc+2)&0xff))+3, opcode_adm_post[opcode_adms[disass_op]] );
+                addr_off=2;
+                break;
+         default:
+           printf ( "Unkonw opcode %02X at address $%0X4 ",disass_op,disass_pc); 
+           break;
+      }
+     return (addr_off);
+}
+
+
+#endif
 #endif
 
 #ifdef DTV_CPU_HACK
@@ -437,8 +493,10 @@ static inline void _ROL(int addr) {
 
 static Uint8 last_p;
 
+extern int   paused;
 
 int cpu_step () {
+    
 	if (cpu_nmiEdge
 #ifdef CPU_65CE02
 		&& cpu_cycles != 1 && !cpu_inhibit_interrupts
@@ -482,11 +540,18 @@ int cpu_step () {
 #endif
 	cpu_op = cpu_read(cpu_pc++);
 #ifdef DEBUG_CPU
+#ifdef CPU_65CE02
 	DEBUG("CPU: at $%04X opcode = $%02X %s %s A=%02X X=%02X Y=%02X Z=%02X SP=%02X" NL, (cpu_pc - 1) & 0xFFFF, cpu_op, opcode_names[cpu_op], opcode_adm_names[opcode_adms[cpu_op]],
 		cpu_a, cpu_x, cpu_y, cpu_z, cpu_sp
 	);
+        printf("CPU: at $%04X opcode = $%02X %s %s A=%02X X=%02X Y=%02X Z=%02X SP=%02X" NL, (cpu_pc - 1) & 0xFFFF, cpu_op, opcode_names[cpu_op], opcode_adm_names[opcode_adms[cpu_op]],
+              cpu_a, cpu_x, cpu_y, cpu_z, cpu_sp
+         );
+        print_disass_line(cpu_pc - 1,cpu_op);
+
 	if (cpu_op == 0x60)
 		DEBUG("CPU: SP before RTS is (SPHI=$%04X) SP=$%02X" NL, cpu_sphi, cpu_sp);
+#endif
 #endif
 #ifdef CPU_TRAP
 	if (cpu_op == CPU_TRAP) {
@@ -1175,6 +1240,9 @@ int cpu_step () {
 			break;
 #endif
 	}
+
+
+	
 	return cpu_cycles;
 }
 

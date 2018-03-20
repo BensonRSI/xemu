@@ -60,7 +60,7 @@ static char umon_read_buffer [0x1000];
 
 
 /* Variables controlling behaviourt of EMU main-loop*/
-static int   paused = 0, paused_old = 0;
+int   paused = 0, paused_old = 0;
 static int   breakpoint_pc = -1;
 static int   trace_step_trigger = 0;
 static void (*m65mon_callback)(void) = NULL;

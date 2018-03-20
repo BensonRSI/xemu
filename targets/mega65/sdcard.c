@@ -42,6 +42,8 @@ static off_t sd_card_size;
 static int   sdcard_bytes_read = 0;
 static int   sd_is_read_only;
 static int   mounted;
+static int   illegal_access=0;  // Kickstart detects a SDHC Card by reading from a sector adress, which isn't allowed on simple SD-Card. 
+                                // We detect it a do not clear the busy-flag. Let the kickstart-routine timeout.
 
 
 static int open_external_d81 ( const char *fn )
@@ -249,6 +251,9 @@ static Uint8 sdcard_read_status ( void )
 {
 	Uint8 ret = sd_status;
 	DEBUG("SDCARD: reading SD status $D680 result is $%02X PC=$%04X" NL, ret, cpu_pc);
+        if (illegal_access){
+           return (SD_ST_BUSY1 | SD_ST_BUSY0);
+        }
 	sd_status &= ~(SD_ST_BUSY1 | SD_ST_BUSY0);
 	return ret;
 }
@@ -343,7 +348,13 @@ void sdcard_write_register ( int reg, Uint8 data )
 		case 0:		// command/status register
 			sdcard_command(data);
 			break;
-		case 1:		// sector address
+		case 1:		// sector address, is devidable by 512 on a simple SD-card
+                        if (data == 0x02){ 
+                            illegal_access=1;
+                            DEBUG("SDCARD: Illegal access to sector number register $%04X with $%02X PC=$%04X" NL, reg + 0xD680, data, cpu_pc);
+                        }else{
+                            illegal_access=0;
+                        }
 		case 2:		// sector address
 		case 3:		// sector address
 		case 4:		// sector address
