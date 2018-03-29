@@ -179,10 +179,10 @@ int sdcard_write_buffer ( int addr, Uint8 data )
 static int host_seek_to ( Uint8 *addr_buffer, int addressing_offset, const char *description, off_t size_limit, int fd )
 {
 	off_t image_offset = (addr_buffer ? (((off_t)addr_buffer[0]) | ((off_t)addr_buffer[1] << 8) | ((off_t)addr_buffer[2] << 16) | ((off_t)addr_buffer[3] << 24)) : 0) ;
-        
-        image_offset*=512;  // FOR SDHC we use sector adressing. Sector size is fixed to 512
+
+        image_offset*=512;  // For SDHC we use sector adressing. Sector size is fixed to 512
         image_offset+= (off_t)addressing_offset;
-        
+
 	DEBUG("SDCARD: %s card at position " PRINTF_LLD " (offset=%d) PC=$%04X" NL, description, (long long)image_offset, addressing_offset, cpu_pc);
 	if (image_offset < 0 || image_offset > size_limit - 512) {
 		FATAL("SDCARD: SEEK: invalid offset requested for %s with offset " PRINTF_LLD " PC=$%04X", description, (long long)image_offset, cpu_pc);
