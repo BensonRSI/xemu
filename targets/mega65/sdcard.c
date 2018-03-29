@@ -42,9 +42,6 @@ static off_t sd_card_size;
 static int   sdcard_bytes_read = 0;
 static int   sd_is_read_only;
 static int   mounted;
-static int   illegal_access=0;  // Kickstart detects a SDHC Card by reading from a sector adress, which isn't allowed on simple SD-Card. 
-                                // We detect it a do not clear the busy-flag. Let the kickstart-routine timeout.
-
 
 static int open_external_d81 ( const char *fn )
 {
@@ -181,7 +178,11 @@ int sdcard_write_buffer ( int addr, Uint8 data )
 
 static int host_seek_to ( Uint8 *addr_buffer, int addressing_offset, const char *description, off_t size_limit, int fd )
 {
-	off_t image_offset = (addr_buffer ? (((off_t)addr_buffer[0]) | ((off_t)addr_buffer[1] << 8) | ((off_t)addr_buffer[2] << 16) | ((off_t)addr_buffer[3] << 24)) : 0) + (off_t)addressing_offset;
+	off_t image_offset = (addr_buffer ? (((off_t)addr_buffer[0]) | ((off_t)addr_buffer[1] << 8) | ((off_t)addr_buffer[2] << 16) | ((off_t)addr_buffer[3] << 24)) : 0) ;
+        
+        image_offset*=512;  // FOR SDHC we use sector adressing. Sector size is fixed to 512
+        image_offset+= (off_t)addressing_offset;
+        
 	DEBUG("SDCARD: %s card at position " PRINTF_LLD " (offset=%d) PC=$%04X" NL, description, (long long)image_offset, addressing_offset, cpu_pc);
 	if (image_offset < 0 || image_offset > size_limit - 512) {
 		FATAL("SDCARD: SEEK: invalid offset requested for %s with offset " PRINTF_LLD " PC=$%04X", description, (long long)image_offset, cpu_pc);
@@ -251,9 +252,6 @@ static Uint8 sdcard_read_status ( void )
 {
 	Uint8 ret = sd_status;
 	DEBUG("SDCARD: reading SD status $D680 result is $%02X PC=$%04X" NL, ret, cpu_pc);
-        if (illegal_access){
-           return (SD_ST_BUSY1 | SD_ST_BUSY0);
-        }
 	sd_status &= ~(SD_ST_BUSY1 | SD_ST_BUSY0);
 	return ret;
 }
@@ -348,13 +346,7 @@ void sdcard_write_register ( int reg, Uint8 data )
 		case 0:		// command/status register
 			sdcard_command(data);
 			break;
-		case 1:		// sector address, is devidable by 512 on a simple SD-card
-                        if (data == 0x02){ 
-                            illegal_access=1;
-                            DEBUG("SDCARD: Illegal access to sector number register $%04X with $%02X PC=$%04X" NL, reg + 0xD680, data, cpu_pc);
-                        }else{
-                            illegal_access=0;
-                        }
+		case 1:		// sector address
 		case 2:		// sector address
 		case 3:		// sector address
 		case 4:		// sector address
